@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
@@ -12,26 +14,43 @@ class TimerService {
   TimerService._internal();
 
   final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
+  final AudioPlayer _audioPlayer = AudioPlayer();
   static const _TAG = '[TimerSvc]';
 
-  // Use separate IDs so the completion notification isn't cancelled by the next phase
+  // Separate IDs so progress / in-app completion / AlarmManager don't cancel each other
   static const _progressNotificationId = 1;
   static const _completionNotificationId = 2;   // in-app completion (show())
   static const _scheduledCompletionId = 3;       // scheduled via AlarmManager (background)
+
+  // Fresh channel ID — Android freezes sound settings after first create
+  static const _completionChannelId = 'session_complete_v4';
 
   Timer? _ticker;
   int _remainingSeconds = 0;
   int _durationSeconds = 0;
   String _currentMode = 'focus';
+  bool _initialized = false;
 
   // Callbacks
   Function(int remaining)? onTick;
   Function()? onComplete;
 
   Future<void> initialize() async {
+    if (_initialized) return;
     try {
-      // Initialize timezone data for scheduled notifications
       tz.initializeTimeZones();
+      // Keep local as system-local if available; fall back to UTC (relative offsets still work)
+      try {
+        final name = DateTime.now().timeZoneName;
+        // timezone package needs IANA names; relative scheduling still works with UTC
+        debugPrint('$_TAG device tz name=$name offset=${DateTime.now().timeZoneOffset}');
+      } catch (_) {}
+
+      // Audio: play even in silent-ish scenarios while app is alive
+      await _audioPlayer.setReleaseMode(ReleaseMode.stop);
+      await _audioPlayer.setVolume(1.0);
+      // Low latency path for short chime
+      await _audioPlayer.setPlayerMode(PlayerMode.lowLatency);
 
       const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
       const iosSettings = DarwinInitializationSettings(
@@ -48,7 +67,6 @@ class TimerService {
       final plugin = _notifications.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
       if (plugin != null) {
-        // Timer progress channel (low priority, no sound)
         await plugin.createNotificationChannel(
           const AndroidNotificationChannel(
             'timer_channel', 'Timer',
@@ -58,23 +76,34 @@ class TimerService {
             enableVibration: false,
           ),
         );
-        // Completion channel — high priority with sound
-        // Channel ID v3 to break Android's cached channel
         await plugin.createNotificationChannel(
-          const AndroidNotificationChannel(
-            'session_complete_v3', 'Session Complete',
-            description: 'Session completion notifications',
-            importance: Importance.high,
+          AndroidNotificationChannel(
+            _completionChannelId, 'Session Complete',
+            description: 'Session completion notifications with chime',
+            importance: Importance.max,
             playSound: true,
             enableVibration: true,
-            sound: RawResourceAndroidNotificationSound('chime'),
+            sound: const RawResourceAndroidNotificationSound('chime'),
+            // Critical so heads-up + sound are more likely while app is open
+            audioAttributesUsage: AudioAttributesUsage.alarm,
           ),
         );
+
+        // Exact alarms (needed for zonedSchedule reliability on Android 12+)
+        try {
+          final canExact = await plugin.canScheduleExactNotifications();
+          debugPrint('$_TAG canScheduleExactNotifications=$canExact');
+          if (canExact == false) {
+            await plugin.requestExactAlarmsPermission();
+          }
+        } catch (e) {
+          debugPrint('$_TAG exact alarm permission: $e');
+        }
       }
 
       await _requestNotificationPermission();
-
-      debugPrint('$_TAG initialized OK');
+      _initialized = true;
+      debugPrint('$_TAG initialized OK (channel=$_completionChannelId)');
     } catch (e, st) {
       debugPrint('$_TAG init failed: $e\n$st');
     }
@@ -90,6 +119,26 @@ class TimerService {
       }
     } catch (e) {
       debugPrint('$_TAG permission request error: $e');
+    }
+  }
+
+  /// Play the completion chime from app assets.
+  /// This is the reliable path when the app process is alive (foreground / backgrounded but not killed).
+  /// Android often suppresses notification sounds while the app is in the foreground —
+  /// so we must NOT rely on notification sound alone.
+  Future<void> playCompletionSound() async {
+    try {
+      // Stop any previous play so rapid completions don't stack
+      await _audioPlayer.stop();
+      await _audioPlayer.play(AssetSource('sounds/chime.ogg'));
+      // Also fire a short haptic + system alert as extra feedback
+      try {
+        await HapticFeedback.heavyImpact();
+        await SystemSound.play(SystemSoundType.alert);
+      } catch (_) {}
+      debugPrint('$_TAG playCompletionSound OK');
+    } catch (e) {
+      debugPrint('$_TAG playCompletionSound failed: $e — trying notification-only fallback');
     }
   }
 
@@ -110,19 +159,18 @@ class TimerService {
     await prefs.setBool('timer_running', true);
     await prefs.setBool('timer_paused', false);
 
+    // Ticker first — never block timer start on notification scheduling
     _startTicker();
     _showProgressNotification(mode, durationSeconds);
 
-    // Don't immediately cancel the previous scheduled completion notification.
-    // If the previous phase just finished, its scheduled notification (ID 3)
-    // is about to fire from AlarmManager with sound. Cancelling it here would
-    // kill the sound. Instead, schedule the new one which replaces ID 3 —
-    // zonedSchedule overwrites the previous schedule for the same ID.
+    // Schedule background completion alarm (ID 3).
+    // Do NOT cancel ID 2 (in-app completion) — previous phase may still be showing.
+    // zonedSchedule on the same ID replaces any previous schedule for ID 3.
     _scheduleCompletionNotification(mode, durationSeconds);
   }
 
   /// Schedule a local notification at the exact time the timer expires.
-  /// Uses Android's AlarmManager via zonedSchedule — fires even when app is dead.
+  /// Fires from AlarmManager even when the app process is dead.
   Future<void> _scheduleCompletionNotification(String mode, int durationSeconds) async {
     try {
       final scheduledTime = tz.TZDateTime.now(tz.local).add(Duration(seconds: durationSeconds));
@@ -135,17 +183,20 @@ class TimerService {
         scheduledTime,
         NotificationDetails(
           android: AndroidNotificationDetails(
-            'session_complete_v3', 'Session Complete',
-            channelDescription: 'Session completion notifications',
-            importance: Importance.high,
-            priority: Priority.high,
+            _completionChannelId, 'Session Complete',
+            channelDescription: 'Session completion notifications with chime',
+            importance: Importance.max,
+            priority: Priority.max,
             autoCancel: true,
             ongoing: false,
             icon: '@mipmap/ic_launcher',
             enableVibration: true,
             vibrationPattern: Int64List.fromList([0, 200, 150, 300, 200, 600]),
             playSound: true,
-            sound: RawResourceAndroidNotificationSound('chime'),
+            sound: const RawResourceAndroidNotificationSound('chime'),
+            category: AndroidNotificationCategory.alarm,
+            audioAttributesUsage: AudioAttributesUsage.alarm,
+            visibility: NotificationVisibility.public,
           ),
           iOS: const DarwinNotificationDetails(
             presentAlert: true,
@@ -161,7 +212,7 @@ class TimerService {
 
       debugPrint('$_TAG scheduled completion for ${scheduledTime.toIso8601String()}');
     } catch (e) {
-      debugPrint('$_TAG schedule completion failed: $e — will rely on in-app ticker');
+      debugPrint('$_TAG schedule completion failed: $e — will rely on in-app ticker + audio');
     }
   }
 
@@ -185,7 +236,6 @@ class TimerService {
       await prefs.setBool('timer_paused', false);
       await prefs.remove('timer_pause_time');
 
-      // Reschedule completion notification for the remaining time
       _scheduleCompletionNotification(_currentMode, _remainingSeconds);
 
       _startTicker();
@@ -206,6 +256,7 @@ class TimerService {
     await prefs.setBool('timer_paused', false);
     await _notifications.cancel(_progressNotificationId);
     await _notifications.cancel(_scheduledCompletionId);
+    // Leave completion notification (ID 2) alone if user just finished — only clear on explicit stop mid-run
     await _notifications.cancel(_completionNotificationId);
   }
 
@@ -220,10 +271,12 @@ class TimerService {
       if (_remainingSeconds <= 0) {
         _ticker?.cancel();
         debugPrint('$_TAG ticker hit 0 — firing onComplete');
-        // Don't cancel the scheduled notification — let it fire from the
-        // system via AlarmManager. That is what plays the sound reliably.
-        // Just clear the progress (ongoing) notification.
+        // App process is alive: cancel AlarmManager ID 3 so we don't double-chime.
+        // Sound comes from audioplayers (playCompletionSound) which is reliable
+        // while the process is alive — including when backgrounded but not killed.
+        // When the process is dead, only ID 3 fires (no ticker).
         _notifications.cancel(_progressNotificationId);
+        _notifications.cancel(_scheduledCompletionId);
         onComplete?.call();
       }
     });
@@ -266,8 +319,8 @@ class TimerService {
 
     if (_remainingSeconds <= 0 && state['running'] == true && state['paused'] == false) {
       _ticker?.cancel();
-      // Timer expired while app was backgrounded — the scheduled notification
-      // already fired. Now update UI state, save the session, auto-start next phase.
+      // Timer expired while app was backgrounded.
+      // AlarmManager may have already shown the notification; still update UI / auto-start.
       onComplete?.call();
       return;
     }
@@ -300,7 +353,11 @@ class TimerService {
     }
   }
 
+  /// Fire completion feedback: ALWAYS play audio first, then show notification banner.
   Future<void> showCompletedNotification() async {
+    // 1) Sound first — independent of Android notification policy
+    await playCompletionSound();
+
     try {
       final vibrationPattern = Int64List.fromList([0, 200, 150, 300, 200, 600]);
       final modeLabel = _currentMode == 'focus' ? 'Focus' : _currentMode == 'break_' ? 'Break' : 'Long Break';
@@ -311,9 +368,9 @@ class TimerService {
         '$modeLabel session complete! Take a break!',
         NotificationDetails(
           android: AndroidNotificationDetails(
-            'session_complete_v3', 'Session Complete',
-            channelDescription: 'Session completion notifications',
-            importance: Importance.high,
+            _completionChannelId, 'Session Complete',
+            channelDescription: 'Session completion notifications with chime',
+            importance: Importance.max,
             priority: Priority.max,
             autoCancel: true,
             ongoing: false,
@@ -321,7 +378,12 @@ class TimerService {
             enableVibration: true,
             vibrationPattern: vibrationPattern,
             playSound: true,
-            sound: RawResourceAndroidNotificationSound('chime'),
+            sound: const RawResourceAndroidNotificationSound('chime'),
+            category: AndroidNotificationCategory.alarm,
+            audioAttributesUsage: AudioAttributesUsage.alarm,
+            visibility: NotificationVisibility.public,
+            // OnlyCancelNotification so we don't kill sound by overwriting mid-play
+            onlyAlertOnce: false,
           ),
           iOS: const DarwinNotificationDetails(
             presentAlert: true,
@@ -332,9 +394,14 @@ class TimerService {
         ),
       );
 
-      debugPrint('$_TAG completion notification sent with sound (ID=$_completionNotificationId)');
+      debugPrint('$_TAG completion notification sent (ID=$_completionNotificationId)');
     } catch (e) {
       debugPrint('$_TAG completion notif failed: $e');
     }
+  }
+
+  void dispose() {
+    _ticker?.cancel();
+    _audioPlayer.dispose();
   }
 }

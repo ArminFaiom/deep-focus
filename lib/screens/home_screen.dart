@@ -306,17 +306,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ti
       debugPrint('DeepFocus: save failed: $e');
     }
 
-    // The scheduled notification (ID 3, via AlarmManager) fires from the
-    // Android system with sound + vibration. Don't cancel it — let it ring.
-    // Also fire the in-app notification as a fallback.
-    _timerService.showCompletedNotification();
+    // ALWAYS play in-app chime + show completion banner.
+    // Android often suppresses notification sounds while the app is foregrounded,
+    // so TimerService.playCompletionSound() (audioplayers) is the reliable path.
+    // AlarmManager scheduled notif (ID 3) still covers the killed-app case.
+    await _timerService.showCompletedNotification();
 
-    // Auto-start next phase, but DELAY 3 seconds so the scheduled completion
-    // notification (AlarmManager, ID 3) has time to fire and play its sound.
-    // Without this delay, startTimer() → zonedSchedule(ID 3, futureTime)
-    // replaces the pending alarm before it fires, killing the sound.
+    // Delay auto-start so:
+    // 1) the chime can finish (~1s)
+    // 2) AlarmManager ID 3 has a window to fire before startTimer overwrites it
     if (autoStart) {
-      Future.delayed(const Duration(seconds: 3), () {
+      Future.delayed(const Duration(seconds: 4), () {
         if (mounted && !_running) {
           setState(() {
             _mode = nextMode!;
