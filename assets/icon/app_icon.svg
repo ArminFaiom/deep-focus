@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Main gradient -->
+    <linearGradient id="mainGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#9B6BFF"/>
+      <stop offset="30%" style="stop-color:#7C5CFC"/>
+      <stop offset="70%" style="stop-color:#6D4BE0"/>
+      <stop offset="100%" style="stop-color:#5B3CCC"/>
+    </linearGradient>
+    
+    <!-- Glow gradient -->
+    <radialGradient id="glowGradient" cx="50%" cy="30%" r="70%">
+      <stop offset="0%" style="stop-color:#9B6BFF;stop-opacity:0.6"/>
+      <stop offset="50%" style="stop-color:#7C5CFC;stop-opacity:0.3"/>
+      <stop offset="100%" style="stop-color:#5B3CCC;stop-opacity:0"/>
+    </radialGradient>
+    
+    <!-- Highlight gradient -->
+    <linearGradient id="highlightGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:white;stop-opacity:0.18"/>
+      <stop offset="100%" style="stop-color:white;stop-opacity:0"/>
+    </linearGradient>
+    
+    <!-- Focus mark gradient -->
+    <linearGradient id="markGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:white;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:white;stop-opacity:0.9"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Outer glow -->
+  <circle cx="256" cy="256" r="320" fill="url(#glowGradient)"/>
+  
+  <!-- Main rounded badge -->
+  <rect x="32" y="32" width="448" height="448" rx="128" ry="128" fill="url(#mainGradient)"/>
+  
+  <!-- Subtle inner highlight -->
+  <rect x="64" y="64" width="384" height="192" rx="96" ry="96" fill="url(#highlightGradient)"/>
+  
+  <!-- Focus mark - Outer ring -->
+  <circle cx="256" cy="256" r="112" fill="none" stroke="url(#markGradient)" stroke-width="18" stroke-linecap="round"/>
+  
+  <!-- Focus mark - Middle ring -->
+  <circle cx="256" cy="256" r="65" fill="none" stroke="url(#markGradient)" stroke-width="14" stroke-linecap="round"/>
+  
+  <!-- Focus mark - Center dot -->
+  <circle cx="256" cy="256" r="18" fill="white"/>
+  
+  <!-- Center dot subtle glow -->
+  <circle cx="256" cy="256" r="24" fill="white" opacity="0.2"/>
+</svg>

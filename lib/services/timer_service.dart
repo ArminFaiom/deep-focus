@@ -10,7 +10,7 @@ class TimerService {
 
   final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
   static const _TAG = '[TimerSvc]';
-  
+
   Timer? _ticker;
   int _remainingSeconds = 0;
   int _durationSeconds = 0;
@@ -57,7 +57,7 @@ class TimerService {
     final prefs = await SharedPreferences.getInstance();
     // We don't track _isPaused in service because UI handles it now
     final isPaused = prefs.getBool('timer_paused') ?? false;
-    
+
     if (!isPaused) {
       _ticker?.cancel();
       await prefs.setInt('timer_remaining', _remainingSeconds);
@@ -68,11 +68,11 @@ class TimerService {
       final pauseTime = prefs.getInt('timer_pause_time') ?? DateTime.now().millisecondsSinceEpoch;
       final pauseDuration = DateTime.now().millisecondsSinceEpoch - pauseTime;
       final oldStart = prefs.getInt('timer_start') ?? 0;
-      
+
       await prefs.setInt('timer_start', oldStart + pauseDuration);
       await prefs.setBool('timer_paused', false);
       await prefs.remove('timer_pause_time');
-      
+
       _startTicker();
       _showProgressNotification(_currentMode, _remainingSeconds);
     }
@@ -138,7 +138,7 @@ class TimerService {
   Future<void> syncStateOnResume() async {
     final state = await getTimerState();
     if (state == null) return;
-    
+
     _currentMode = state['mode'] as String;
     _durationSeconds = state['duration'] as int;
     _remainingSeconds = state['remaining'] as int;
@@ -148,7 +148,7 @@ class TimerService {
       onComplete?.call();
       return;
     }
-    
+
     if (state['running'] == true && state['paused'] == false) {
       _startTicker();
     }
@@ -160,7 +160,7 @@ class TimerService {
       await _notifications.show(
         1,
         'Deep Focus',
-        '$modeLabel timer running...',
+        '$modeLabel timer running…',
         const NotificationDetails(
           android: AndroidNotificationDetails(
             'timer_channel', 'Timer',
@@ -177,20 +177,21 @@ class TimerService {
     }
   }
 
-  Future<void> _showCompletionNotification() async {
+  Future<void> showCompletedNotification() async {
     try {
       await _notifications.show(
         2,
         'Deep Focus',
-        '$_currentMode session complete! 🎉',
+        '$_currentMode session complete!',
         const NotificationDetails(
           android: AndroidNotificationDetails(
-            'timer_channel', 'Timer',
-            channelDescription: 'Focus timer notifications',
+            'completion_channel', 'Completion',
+            channelDescription: 'Session completion notifications',
             importance: Importance.high,
             priority: Priority.high,
-            playSound: true,
-            enableVibration: true,
+            autoCancel: true,
+            ongoing: false,
+            icon: '@mipmap/ic_launcher',
           ),
         ),
       );
@@ -198,7 +199,4 @@ class TimerService {
       debugPrint('$_TAG completion notif failed: $e');
     }
   }
-
-  // Public — for triggering completion notification from outside
-  Future<void> showCompletedNotification() async => _showCompletionNotification();
 }

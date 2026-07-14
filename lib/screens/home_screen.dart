@@ -5,7 +5,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
 import '../services/timer_service.dart';
-import '../widgets/app_icons.dart';
+import '../widgets/custom_icons.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -14,7 +14,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, TickerProviderStateMixin {
   // Timer state
   TimerMode _mode = TimerMode.focus;
   bool _running = false;
@@ -33,17 +33,50 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // Sessions
   List<Map<String, dynamic>> _sessions = [];
 
+  // Animations
+  late AnimationController _ringController;
+  late AnimationController _pulseController;
+  late AnimationController _modeSwitchController;
+  late Animation<double> _modeSwitchAnimation;
+  late Animation<double> _pulseAnimation;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadSettings();
     _initializeTimer();
+    _initAnimations();
+  }
+
+  void _initAnimations() {
+    _ringController = AnimationController(
+      duration: const Duration(milliseconds: 1200),
+      vsync: this,
+    );
+    _pulseController = AnimationController(
+      duration: const Duration(milliseconds: 2000),
+      vsync: this,
+    )..repeat(reverse: true);
+    _modeSwitchController = AnimationController(
+      duration: const Duration(milliseconds: 400),
+      vsync: this,
+    );
+    _modeSwitchAnimation = CurvedAnimation(
+      parent: _modeSwitchController,
+      curve: Curves.easeOutCubic,
+    );
+    _pulseAnimation = Tween<double>(begin: 0.95, end: 1.05).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _ringController.dispose();
+    _pulseController.dispose();
+    _modeSwitchController.dispose();
     super.dispose();
   }
 
@@ -55,15 +88,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _initializeTimer() async {
-    // Set callbacks synchronously FIRST so Start works immediately
     _timerService.onTick = (remaining) {
-      if (mounted) setState(() => _remaining = remaining);
+      if (mounted) {
+        setState(() => _remaining = remaining);
+        _updateRingAnimation();
+      }
     };
     _timerService.onComplete = () {
       if (mounted) _handleTimerComplete();
     };
-    // Then init the notification plugin in background
     _timerService.initialize().then((_) => _syncTimerState());
+  }
+
+  void _updateRingAnimation() {
+    if (_total > 0 && _running && !_paused) {
+      final progress = 1.0 - (_remaining / _total);
+      _ringController.value = progress;
+    }
   }
 
   Future<void> _syncTimerState() async {
@@ -76,8 +117,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _total = state['duration'] as int;
         final modeStr = state['mode'] as String;
         _mode = TimerMode.values.firstWhere((m) => m.name == modeStr);
+        _completed = !_running && _remaining <= 0 && _total > 0;
       });
       await _timerService.syncStateOnResume();
+      _updateRingAnimation();
     }
   }
 
@@ -120,23 +163,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  String get _label {
-    switch (_mode) {
-      case TimerMode.focus: return 'FOCUS';
-      case TimerMode.break_: return 'BREAK';
-      case TimerMode.long: return 'LONG BREAK';
-    }
-  }
+  String get _label => _mode.label;
 
-  Color get _accentColor => _colorForMode(_mode);
-
-  Color _colorForMode(TimerMode mode) {
-    switch (mode) {
-      case TimerMode.focus: return const Color(0xFF7C5CFC);
-      case TimerMode.break_: return const Color(0xFF34D399);
-      case TimerMode.long: return const Color(0xFF2DD4BF);
-    }
-  }
+  Color get _accentColor => _mode.color;
 
   String get _todayStr {
     final n = DateTime.now();
@@ -155,16 +184,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int get _totalMinutes =>
       _sessions.fold(0, (sum, s) => sum + (s['duration'] as int));
 
-  /// How many of the 4 pomodoro-cycle dots are filled today.
-  int get _cycleFilled {
-    final n = _todayFocusSessions % 4;
-    return (n == 0 && _todayFocusSessions > 0) ? 4 : n;
+  String get _totalDisplay {
+    final hours = _totalMinutes ~/ 60;
+    final mins = _totalMinutes % 60;
+    if (hours == 0) return '${mins}m';
+    if (mins == 0) return '${hours}h';
+    return '${hours}h ${mins}m';
   }
 
-  String get _totalDisplay {
-    final mins = _totalMinutes ~/ 60;
-    if (mins < 60) return '${mins}m';
-    return '${(mins / 60).toStringAsFixed(1)}h';
+  int get _streakDays {
+    int streak = 0;
+    final now = DateTime.now();
+    for (int i = 0; i < 365; i++) {
+      final d = now.subtract(Duration(days: i));
+      final key = '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      final hasFocus = _sessions.any((s) => s['date'] == key && s['mode'] == 'focus');
+      if (hasFocus) {
+        streak++;
+      } else if (i > 0) {
+        break;
+      }
+    }
+    return streak;
   }
 
   List<_DayData> get _weeklyData {
@@ -176,7 +217,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           .where((s) => s['date'] == key)
           .fold(0, (sum, s) => sum + (s['duration'] as int));
       result.add(_DayData(
-        ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.weekday % 7],
+        ['S', 'M', 'T', 'W', 'T', 'F', 'S'][d.weekday % 7],
         mins ~/ 60,
       ));
     }
@@ -195,12 +236,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _paused = false;
       _completed = false;
     });
+    _ringController.reset();
   }
 
   void _startTimer() {
-    if (_completed) {
-      _resetDisplay();
-    }
+    if (_completed) _resetDisplay();
     if (_running) return;
     final secs = _secondsForMode;
     setState(() {
@@ -210,21 +250,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _remaining = secs;
       _total = secs;
     });
-    _timerService.startTimer(
-      durationSeconds: secs,
-      mode: _mode.name,
-    );
+    _ringController.forward(from: 0);
+    _timerService.startTimer(durationSeconds: secs, mode: _mode.name);
   }
 
   Future<void> _handleTimerComplete() async {
-    // Single source of truth for what happens when timer hits 0
     final now = DateTime.now();
     final modeName = _mode.name;
     final completedDuration = _total;
 
     debugPrint('DeepFocus: handleTimerComplete mode=$modeName dur=$completedDuration');
 
-    // Compute next mode + duration BEFORE setState (avoids mid-build races)
+    // Compute next mode BEFORE setState
     TimerMode? nextMode;
     int nextSecs = 0;
     if (modeName == 'focus') {
@@ -238,7 +275,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       nextSecs = _focusMin * 60;
     }
 
-    // Build the session record and update in-memory list
     final session = {
       'date': _todayStr,
       'duration': completedDuration,
@@ -247,10 +283,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     };
     final newSessions = List<Map<String, dynamic>>.from(_sessions)..add(session);
 
-    // Two paths:
-    //  - nextMode set AND duration configured (>0): auto-start next phase
-    //  - otherwise: stay in 00:00 "complete" state, wait for user tap
-    bool autoStart = nextMode != null && nextSecs > 0 && !_paused;
+    final bool autoStart = nextMode != null && nextSecs > 0 && !_paused;
 
     setState(() {
       _sessions = newSessions;
@@ -265,21 +298,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     });
 
-    // Persist immediately (await), don't fire-and-forget
+    // Persist immediately
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('sessions', jsonEncode(_sessions));
-      debugPrint('DeepFocus: saved session, total count=${_sessions.length}');
+      debugPrint('DeepFocus: saved session, total=${_sessions.length}');
     } catch (e) {
       debugPrint('DeepFocus: save failed: $e');
     }
 
-    // If auto-starting, kick the new timer
+    // Trigger completion notification
+    await _timerService.showCompletedNotification();
+
+    // Auto-start next phase
     if (autoStart) {
-      _timerService.startTimer(
-        durationSeconds: nextSecs,
-        mode: _mode.name,
-      );
+      _ringController.forward(from: 0);
+      _timerService.startTimer(durationSeconds: nextSecs, mode: _mode.name);
     }
   }
 
@@ -287,6 +321,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!_running) return;
     setState(() => _paused = !_paused);
     _timerService.pauseTimer();
+    if (_paused) {
+      _ringController.stop();
+    } else {
+      _ringController.forward(from: _ringController.value);
+    }
   }
 
   void _applyPreset(int f, int b, int l) {
@@ -298,6 +337,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
     _saveDurations();
     _resetDisplay();
+    _modeSwitchController.forward(from: 0);
   }
 
   void _setDuration(TimerMode mode, int val) {
@@ -320,24 +360,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return '$m:$s';
   }
 
-  // ─── UI ──────────────────────────────────────
+  // ─── UI Constants ────────────────────────────
 
+  static const _bgColor = Color(0xFF0B0B12);
   static const _cardColor = Color(0xFF15151F);
   static const _cardBorder = Color(0xFF26263A);
   static const _muted = Color(0xFF74748C);
+  static const _glassColor = Color(0x1AFFFFFF);
+  static const _glassBorder = Color(0x33FFFFFF);
+
+  // ─── Build ──────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: AnimatedContainer(
-        duration: const Duration(milliseconds: 500),
-        curve: Curves.easeOut,
+        duration: const Duration(milliseconds: 600),
+        curve: Curves.easeOutCubic,
         decoration: BoxDecoration(
           gradient: RadialGradient(
-            center: const Alignment(0, -0.7),
-            radius: 1.3,
-            colors: [_accentColor.withOpacity(0.14), const Color(0xFF0B0B12)],
-            stops: const [0.0, 0.75],
+            center: const Alignment(0, -0.6),
+            radius: 1.4,
+            colors: [
+              _accentColor.withOpacity(0.18),
+              _bgColor,
+            ],
+            stops: const [0.0, 0.7],
           ),
         ),
         child: SafeArea(
@@ -369,7 +417,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
       child: Row(
         children: [
-          const AppLogoMark(size: 42),
+          const AppLogoMark(size: 44),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -377,13 +425,64 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               children: [
                 const Text(
                   'Deep Focus',
-                  style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: -0.4, height: 1.1),
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                    letterSpacing: -0.4,
+                    height: 1.1,
+                  ),
                 ),
+                const SizedBox(height: 2),
                 Text(
-                  _running ? (_paused ? 'Paused' : 'Session in progress…') : 'Stay in the zone',
-                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500, color: _muted),
+                  _running
+                      ? (_paused ? 'Paused' : 'Session in progress…')
+                      : 'Stay in the zone',
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                    color: _muted,
+                  ),
                 ),
               ],
+            ),
+          ),
+          if (_streakDays > 0) _buildStreakBadge(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStreakBadge() {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [_accentColor.withOpacity(0.2), _accentColor.withOpacity(0.08)],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _accentColor.withOpacity(0.4)),
+        boxShadow: [
+          BoxShadow(
+            color: _accentColor.withOpacity(0.2),
+            blurRadius: 8,
+            spreadRadius: -2,
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.local_fire_department_rounded, size: 13, color: _accentColor),
+          const SizedBox(width: 4),
+          Text(
+            '$_streakDays',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: _accentColor,
+              fontFamily: 'monospace',
             ),
           ),
         ],
@@ -391,7 +490,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  // ── Hero timer card ─────────────────────────
+  // ── Hero Timer Card ─────────────────────────
 
   Widget _buildHeroTimerCard() {
     final fraction = _total > 0 ? _remaining / _total : 1.0;
@@ -400,10 +499,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 26),
         decoration: BoxDecoration(
-          color: _cardColor,
-          borderRadius: BorderRadius.circular(28),
+          color: _cardColor.withOpacity(0.9),
+          borderRadius: BorderRadius.circular(32),
           border: Border.all(color: _cardBorder),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 24, offset: const Offset(0, 10))],
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: 32,
+              offset: const Offset(0, 12),
+              spreadRadius: -4,
+            ),
+            BoxShadow(
+              color: _accentColor.withOpacity(0.1),
+              blurRadius: 24,
+              offset: const Offset(0, 0),
+              spreadRadius: -4,
+            ),
+          ],
         ),
         child: Column(
           children: [
@@ -433,15 +545,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   },
                 ),
                 const SizedBox(width: 18),
-                _circleButton(
-                  icon: _completed
-                      ? Icons.replay_rounded
-                      : (_running && !_paused ? Icons.pause_rounded : Icons.play_arrow_rounded),
-                  size: 74,
-                  primary: true,
-                  onTap: () {
-                    HapticFeedback.mediumImpact();
-                    _completed ? _startTimer() : (_running ? _togglePause() : _startTimer());
+                AnimatedBuilder(
+                  animation: _pulseAnimation,
+                  builder: (context, child) {
+                    return Transform.scale(
+                      scale: (_running && !_paused && !_completed) ? _pulseAnimation.value : 1.0,
+                      child: _circleButton(
+                        icon: _completed
+                            ? Icons.replay_rounded
+                            : (_running && !_paused ? Icons.pause_rounded : Icons.play_arrow_rounded),
+                        size: 78,
+                        primary: true,
+                        onTap: () {
+                          HapticFeedback.mediumImpact();
+                          _completed ? _startTimer() : (_running ? _togglePause() : _startTimer());
+                        },
+                      ),
+                    );
                   },
                 ),
               ],
@@ -456,11 +576,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final color = _accentColor.withOpacity(0.9);
     switch (_mode) {
       case TimerMode.focus:
-        return FocusMarkIcon(size: 22, color: color, strokeWidth: 2.2);
+        return FocusIcon(size: 24, color: color, strokeWidth: 2.4);
       case TimerMode.break_:
-        return Icon(Icons.local_cafe_rounded, size: 22, color: color);
+        return BreakIcon(size: 24, color: color);
       case TimerMode.long:
-        return Icon(Icons.self_improvement_rounded, size: 22, color: color);
+        return LongBreakIcon(size: 24, color: color);
     }
   }
 
@@ -471,17 +591,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       children: List.generate(4, (i) {
         final on = i < filled;
         return AnimatedContainer(
-          duration: const Duration(milliseconds: 250),
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
           margin: const EdgeInsets.symmetric(horizontal: 3),
-          width: on ? 16 : 6,
+          width: on ? 18 : 6,
           height: 6,
           decoration: BoxDecoration(
             color: on ? _accentColor : const Color(0xFF2A2A3E),
             borderRadius: BorderRadius.circular(4),
+            boxShadow: on
+                ? [BoxShadow(color: _accentColor.withOpacity(0.4), blurRadius: 8, spreadRadius: -2)]
+                : null,
           ),
         );
       }),
     );
+  }
+
+  int get _cycleFilled {
+    final n = _todayFocusSessions % 4;
+    return (n == 0 && _todayFocusSessions > 0) ? 4 : n;
   }
 
   Widget _segmentedModeControl() {
@@ -491,8 +620,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
         color: const Color(0xFF0F0F17),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: _cardBorder),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -502,7 +638,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: Stack(
               children: [
                 AnimatedPositioned(
-                  duration: const Duration(milliseconds: 280),
+                  duration: const Duration(milliseconds: 300),
                   curve: Curves.easeOutCubic,
                   left: segW * index,
                   top: 0,
@@ -511,19 +647,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   child: Container(
                     margin: const EdgeInsets.symmetric(horizontal: 2),
                     decoration: BoxDecoration(
-                      color: _accentColor.withOpacity(0.16),
-                      borderRadius: BorderRadius.circular(12),
+                      gradient: LinearGradient(
+                        colors: [_accentColor.withOpacity(0.18), _accentColor.withOpacity(0.08)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(14),
                       border: Border.all(color: _accentColor.withOpacity(0.55)),
-                      boxShadow: [BoxShadow(color: _accentColor.withOpacity(0.25), blurRadius: 10, spreadRadius: -2)],
+                      boxShadow: [
+                        BoxShadow(
+                          color: _accentColor.withOpacity(0.25),
+                          blurRadius: 12,
+                          spreadRadius: -3,
+                        ),
+                      ],
                     ),
                   ),
                 ),
                 Row(
-                  children: [
-                    _segmentItem(TimerMode.focus, 'Focus'),
-                    _segmentItem(TimerMode.break_, 'Break'),
-                    _segmentItem(TimerMode.long, 'Long'),
-                  ],
+                  children: modes.map((mode) => _segmentItem(mode, mode.shortLabel)).toList(),
                 ),
               ],
             ),
@@ -536,35 +678,47 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _segmentItem(TimerMode mode, String label) {
     final active = _mode == mode;
     final color = active ? _accentColor : _muted;
-    Widget icon;
-    switch (mode) {
-      case TimerMode.focus:
-        icon = FocusMarkIcon(size: 16, color: color, strokeWidth: 2.0);
-      case TimerMode.break_:
-        icon = Icon(Icons.local_cafe_rounded, size: 17, color: color);
-      case TimerMode.long:
-        icon = Icon(Icons.self_improvement_rounded, size: 17, color: color);
-    }
     return Expanded(
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: _running ? null : () {
-          HapticFeedback.selectionClick();
-          setState(() { _mode = mode; _resetDisplay(); });
-        },
+        onTap: _running
+            ? null
+            : () {
+                HapticFeedback.selectionClick();
+                setState(() {
+                  _mode = mode;
+                  _resetDisplay();
+                });
+                _modeSwitchController.forward(from: 0);
+              },
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            icon,
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              child: mode.icon(size: 18, color: color, opacity: active ? 1.0 : 0.7, key: ValueKey(mode)),
+            ),
             const SizedBox(height: 4),
-            Text(label, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: color)),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _circleButton({required IconData icon, required double size, required bool primary, required VoidCallback onTap}) {
+  Widget _circleButton({
+    required IconData icon,
+    required double size,
+    required bool primary,
+    required VoidCallback onTap,
+  }) {
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -574,20 +728,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           gradient: primary
-              ? LinearGradient(colors: [_accentColor, _accentColor.withOpacity(0.72)], begin: Alignment.topLeft, end: Alignment.bottomRight)
+              ? LinearGradient(
+                  colors: [_accentColor, _accentColor.withOpacity(0.72)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                )
               : null,
           color: primary ? null : const Color(0xFF1D1D2C),
           border: primary ? null : Border.all(color: _cardBorder),
           boxShadow: primary
-              ? [BoxShadow(color: _accentColor.withOpacity(0.45), blurRadius: 20, offset: const Offset(0, 8))]
+              ? [BoxShadow(color: _accentColor.withOpacity(0.45), blurRadius: 24, offset: const Offset(0, 10))]
               : null,
         ),
-        child: Icon(icon, size: primary ? 32 : 22, color: primary ? Colors.white : const Color(0xFFB8B8CC)),
+        child: Icon(icon, size: primary ? 34 : 24, color: primary ? Colors.white : const Color(0xFFB8B8CC)),
       ),
     );
   }
 
-  // ── Session length card ─────────────────────
+  // ── Session Length Card ─────────────────────
 
   Widget _buildSessionLengthCard() {
     return Padding(
@@ -595,39 +753,76 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       child: Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: _cardColor,
-          borderRadius: BorderRadius.circular(22),
+          color: _cardColor.withOpacity(0.9),
+          borderRadius: BorderRadius.circular(24),
           border: Border.all(color: _cardBorder),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+              spreadRadius: -4,
+            ),
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('SESSION LENGTH', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: _muted, letterSpacing: 1.2)),
+            const Text(
+              'SESSION LENGTH',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                color: _muted,
+                letterSpacing: 1.2,
+              ),
+            ),
             const SizedBox(height: 14),
             Row(
               children: [
-                _presetTile(const TomatoIcon(size: 20), 'Pomodoro', 25, 5, 15),
+                _presetTile(
+                  const TomatoIcon(size: 20),
+                  'Pomodoro',
+                  25, 5, 15,
+                ),
                 const SizedBox(width: 10),
-                _presetTile(const Icon(Icons.psychology_outlined, size: 20, color: Colors.white), 'Deep', 50, 10, 30),
+                _presetTile(
+                  const FocusIcon(size: 20, color: Colors.white, strokeWidth: 2.2),
+                  'Deep Work',
+                  50, 10, 30,
+                ),
                 const SizedBox(width: 10),
-                _presetTile(const Icon(Icons.bolt_rounded, size: 20, color: Colors.white), 'Quick', 15, 3, 10),
+                _presetTile(
+                  const Icon(Icons.bolt_rounded, size: 20, color: Colors.white),
+                  'Quick',
+                  15, 3, 10,
+                ),
               ],
             ),
             const SizedBox(height: 22),
-            _durationSlider(Icons.center_focus_strong_rounded, 'Focus', TimerMode.focus, _focusMin, 1, 120, (v) => _setDuration(TimerMode.focus, v)),
+            _durationSlider(TimerMode.focus, 'Focus', _focusMin, 1, 120),
             const SizedBox(height: 14),
-            _durationSlider(Icons.local_cafe_rounded, 'Break', TimerMode.break_, _breakMin, 1, 60, (v) => _setDuration(TimerMode.break_, v)),
+            _durationSlider(TimerMode.break_, 'Break', _breakMin, 1, 60),
             const SizedBox(height: 14),
-            _durationSlider(Icons.self_improvement_rounded, 'Long', TimerMode.long, _longMin, 1, 120, (v) => _setDuration(TimerMode.long, v)),
+            _durationSlider(TimerMode.long, 'Long', _longMin, 1, 120),
             const SizedBox(height: 14),
             Center(
               child: GestureDetector(
                 onTap: _running ? null : () => _applyPreset(25, 5, 15),
-                child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.refresh_rounded, size: 13, color: _muted),
-                  SizedBox(width: 4),
-                  Text('Reset to defaults', style: TextStyle(fontSize: 12, color: _muted)),
-                ]),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.refresh_rounded, size: 13, color: _running ? _muted.withOpacity(0.4) : _muted),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Reset to defaults',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: _running ? _muted.withOpacity(0.4) : _muted,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
@@ -640,39 +835,65 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final active = _focusMin == f && _breakMin == b && _longMin == l;
     return Expanded(
       child: GestureDetector(
-        onTap: _running ? null : () {
-          HapticFeedback.selectionClick();
-          _applyPreset(f, b, l);
-        },
+        onTap: _running
+            ? null
+            : () {
+                HapticFeedback.selectionClick();
+                _applyPreset(f, b, l);
+              },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(vertical: 14),
           decoration: BoxDecoration(
-            color: active ? const Color(0xFF7C5CFC).withOpacity(0.14) : const Color(0xFF1B1B28),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: active ? const Color(0xFF7C5CFC).withOpacity(0.55) : _cardBorder),
+            color: active ? _accentColor.withOpacity(0.14) : const Color(0xFF1B1B28),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: active ? _accentColor.withOpacity(0.55) : _cardBorder),
+            boxShadow: active
+                ? [BoxShadow(color: _accentColor.withOpacity(0.15), blurRadius: 12, spreadRadius: -4, offset: const Offset(0, 4))]
+                : null,
           ),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            icon,
-            const SizedBox(height: 6),
-            Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: active ? Colors.white : _muted)),
-          ]),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              icon,
+              const SizedBox(height: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: active ? Colors.white : _muted,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _durationSlider(IconData fallbackIcon, String label, TimerMode mode, int value, int min, int max, ValueChanged<int> onChanged) {
-    final color = _colorForMode(mode);
+  Widget _durationSlider(TimerMode mode, String label, int value, int min, int max) {
+    final color = mode.color;
     return Row(
       children: [
         SizedBox(
-          width: 26,
+          width: 28,
           child: mode == TimerMode.focus
-              ? FocusMarkIcon(size: 15, color: color, strokeWidth: 1.8)
-              : Icon(fallbackIcon, size: 16, color: color),
+              ? FocusIcon(size: 16, color: color, strokeWidth: 2.0)
+              : mode.icon(size: 17, color: color, opacity: 0.9),
         ),
-        SizedBox(width: 52, child: Text(label.toUpperCase(), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _muted, letterSpacing: 0.5))),
+        SizedBox(
+          width: 52,
+          child: Text(
+            label.toUpperCase(),
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: _muted,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ),
         Expanded(
           child: SliderTheme(
             data: SliderThemeData(
@@ -683,31 +904,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 9),
               overlayColor: color.withOpacity(0.2),
               overlayShape: const RoundSliderOverlayShape(overlayRadius: 22),
+              valueIndicatorColor: color,
+              valueIndicatorTextStyle: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
             child: Slider(
               value: value.toDouble(),
               min: min.toDouble(),
               max: max.toDouble(),
-              onChanged: _running ? null : (v) {
-                setState(() {
-                  final rounded = v.round();
-                  switch (mode) {
-                    case TimerMode.focus: _focusMin = rounded;
-                    case TimerMode.break_: _breakMin = rounded;
-                    case TimerMode.long: _longMin = rounded;
-                  }
-                });
-              },
-              onChangeEnd: _running ? null : (v) => onChanged(v.round()),
+              onChanged: _running
+                  ? null
+                  : (v) {
+                      setState(() {
+                        final rounded = v.round();
+                        switch (mode) {
+                          case TimerMode.focus: _focusMin = rounded;
+                          case TimerMode.break_: _breakMin = rounded;
+                          case TimerMode.long: _longMin = rounded;
+                        }
+                      });
+                    },
+              onChangeEnd: _running
+                  ? null
+                  : (v) => _setDuration(mode, v.round()),
             ),
           ),
         ),
-        SizedBox(width: 34, child: Text('$value', textAlign: TextAlign.right, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white, fontFamily: 'monospace'))),
+        SizedBox(
+          width: 36,
+          child: Text(
+            '$value',
+            textAlign: TextAlign.right,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+              fontFamily: 'monospace',
+            ),
+          ),
+        ),
       ],
     );
   }
 
-  // ── Insights card ───────────────────────────
+  // ── Insights Card ───────────────────────────
 
   Widget _buildInsightsCard() {
     final data = _weeklyData;
@@ -717,14 +960,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       child: Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: _cardColor,
-          borderRadius: BorderRadius.circular(22),
+          color: _cardColor.withOpacity(0.9),
+          borderRadius: BorderRadius.circular(24),
           border: Border.all(color: _cardBorder),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+              spreadRadius: -4,
+            ),
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('INSIGHTS', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: _muted, letterSpacing: 1.2)),
+            const Text(
+              'INSIGHTS',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                color: _muted,
+                letterSpacing: 1.2,
+              ),
+            ),
             const SizedBox(height: 16),
             Row(
               children: [
@@ -736,18 +995,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ],
             ),
             const SizedBox(height: 24),
-            Row(children: const [
-              Icon(Icons.bar_chart_rounded, size: 14, color: _muted),
-              SizedBox(width: 6),
-              Text('This week', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _muted)),
-            ]),
+            Row(
+              children: [
+                Icon(Icons.bar_chart_rounded, size: 14, color: _muted),
+                const SizedBox(width: 6),
+                Text(
+                  'This week',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _muted,
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 12),
             SizedBox(
-              height: 84,
+              height: 88,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: data.map((d) {
-                  final ht = maxMins > 0 ? (d.minutes / maxMins).clamp(0.03, 1.0) : 0.03;
+                  final ht = maxMins > 0 ? (d.minutes / maxMins).clamp(0.05, 1.0) : 0.05;
                   return Expanded(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 3),
@@ -756,11 +1024,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         children: [
                           Text('${d.minutes}', style: const TextStyle(fontSize: 9, color: _muted)),
                           const SizedBox(height: 4),
-                          Container(
-                            height: 56 * ht,
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 500),
+                            curve: Curves.easeOutCubic,
+                            height: 58 * ht,
                             decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(5),
-                              gradient: LinearGradient(colors: [_accentColor, _accentColor.withOpacity(0.28)], begin: Alignment.topCenter, end: Alignment.bottomCenter),
+                              borderRadius: BorderRadius.circular(6),
+                              gradient: LinearGradient(
+                                colors: [_accentColor, _accentColor.withOpacity(0.28)],
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: _accentColor.withOpacity(0.3),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, -2),
+                                ),
+                              ],
                             ),
                           ),
                           const SizedBox(height: 6),
@@ -784,9 +1065,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         children: [
           Icon(icon, size: 17, color: _accentColor),
           const SizedBox(height: 6),
-          Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.white)),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+            ),
+          ),
           const SizedBox(height: 2),
-          Text(label, textAlign: TextAlign.center, style: const TextStyle(fontSize: 10.5, color: _muted)),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 10.5, color: _muted),
+          ),
         ],
       ),
     );
@@ -797,7 +1089,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 }
 
-// ─── Widgets ─────────────────────────────────
+// ─── Timer Ring Widget ─────────────────────────────────
 
 class _TimerRing extends StatelessWidget {
   final double fraction;
@@ -819,11 +1111,17 @@ class _TimerRing extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 240,
-      height: 240,
+      width: 250,
+      height: 250,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        boxShadow: [BoxShadow(color: accentColor.withOpacity(0.30), blurRadius: 44, spreadRadius: -6)],
+        boxShadow: [
+          BoxShadow(
+            color: accentColor.withOpacity(0.35),
+            blurRadius: 48,
+            spreadRadius: -8,
+          ),
+        ],
       ),
       child: CustomPaint(
         painter: _RingPainter(fraction: 1.0 - fraction, accentColor: accentColor),
@@ -832,15 +1130,37 @@ class _TimerRing extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               AnimatedSwitcher(
-                duration: const Duration(milliseconds: 250),
+                duration: const Duration(milliseconds: 300),
                 child: completed
-                    ? Icon(Icons.check_circle_rounded, key: const ValueKey('done'), size: 52, color: accentColor)
+                    ? Icon(
+                        Icons.check_circle_rounded,
+                        key: const ValueKey('done'),
+                        size: 56,
+                        color: accentColor,
+                      )
                     : KeyedSubtree(key: const ValueKey('mode'), child: modeIcon),
               ),
               const SizedBox(height: 10),
-              Text(time, style: const TextStyle(fontSize: 46, fontWeight: FontWeight.w300, color: Colors.white, fontFamily: 'monospace', letterSpacing: 2)),
+              Text(
+                time,
+                style: const TextStyle(
+                  fontSize: 48,
+                  fontWeight: FontWeight.w300,
+                  color: Colors.white,
+                  fontFamily: 'monospace',
+                  letterSpacing: 2,
+                ),
+              ),
               const SizedBox(height: 6),
-              Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: accentColor, letterSpacing: 2)),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: accentColor,
+                  letterSpacing: 2,
+                ),
+              ),
             ],
           ),
         ),
@@ -858,19 +1178,66 @@ class _RingPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = (size.width / 2) - 17;
-    canvas.drawCircle(center, radius, Paint()..color = const Color(0xFF262638)..style = PaintingStyle.stroke..strokeWidth = 7..strokeCap = StrokeCap.round);
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
-      -1.5708, -fraction * 6.2832, false,
+    final radius = (size.width / 2) - 8.5;
+
+    // Background track
+    canvas.drawCircle(
+      center,
+      radius,
       Paint()
-        ..shader = LinearGradient(colors: [accentColor, accentColor.withOpacity(0.6)]).createShader(Rect.fromCircle(center: center, radius: radius))
-        ..style = PaintingStyle.stroke..strokeWidth = 7..strokeCap = StrokeCap.round,
+        ..color = const Color(0xFF262638)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 17
+        ..strokeCap = StrokeCap.round,
     );
+
+    // Progress arc
+    if (fraction > 0) {
+      final progressPaint = Paint()
+        ..shader = SweepGradient(
+          startAngle: -3.14159 / 2,
+          endAngle: 3.14159 * 1.5,
+          colors: [
+            accentColor,
+            accentColor.withOpacity(0.6),
+            accentColor,
+          ],
+          stops: const [0.0, 0.5, 1.0],
+        ).createShader(Rect.fromCircle(center: center, radius: radius))
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 17
+        ..strokeCap = StrokeCap.round;
+
+      final sweepAngle = 2 * 3.14159 * fraction;
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        -3.14159 / 2,
+        sweepAngle,
+        false,
+        progressPaint,
+      );
+
+      // Glow on progress end
+      if (fraction < 1.0) {
+        final endAngle = -3.14159 / 2 + sweepAngle;
+        final endPoint = Offset(
+          center.dx + radius * cos(endAngle),
+          center.dy + radius * sin(endAngle),
+        );
+        final glowPaint = Paint()
+          ..color = accentColor
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+        canvas.drawCircle(endPoint, 10, glowPaint);
+      }
+    }
   }
 
+  double cos(double r) => cos(r);
+  double sin(double r) => sin(r);
+
   @override
-  bool shouldRepaint(covariant _RingPainter old) => old.fraction != fraction || old.accentColor != accentColor;
+  bool shouldRepaint(covariant _RingPainter old) =>
+      old.fraction != fraction || old.accentColor != accentColor;
 }
 
 // ─── Value types ─────────────────────────────
@@ -880,5 +1247,3 @@ class _DayData {
   final int minutes;
   const _DayData(this.day, this.minutes);
 }
-
-enum TimerMode { focus, break_, long }

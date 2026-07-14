@@ -12,11 +12,52 @@ dependencies:
   shared_preferences: ^2.3.0
   flutter_local_notifications: ^18.0.0
   google_fonts: ^6.2.1
+  flutter_native_splash: ^2.4.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.13.1
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/icon/app_icon.svg
+
+# Flutter Launcher Icons Configuration
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/icon/app_icon.svg"
+  min_sdk_android: 21
+  web:
+    generate: true
+    image_path: "assets/icon/app_icon.svg"
+    background_color: "#0B0B12"
+    theme_color: "#7C5CFC"
+  windows:
+    generate: true
+    image_path: "assets/icon/app_icon.svg"
+    icon_size: 48
+  macos:
+    generate: true
+    image_path: "assets/icon/app_icon.svg"
+
+# Flutter Native Splash Configuration
+flutter_native_splash:
+  color: "#0B0B12"
+  image: "assets/icon/app_icon.svg"
+  color_dark: "#0B0B12"
+  image_dark: "assets/icon/app_icon.svg"
+  android_12:
+    image: "assets/icon/app_icon.svg"
+    color: "#0B0B12"
+  ios:
+    image: "assets/icon/app_icon.svg"
+    color: "#0B0B12"
+  web:
+    image: "assets/icon/app_icon.svg"
+    color: "#0B0B12"
+  background_image: ""
+  fullscreen: true
