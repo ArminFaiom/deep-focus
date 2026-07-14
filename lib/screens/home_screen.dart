@@ -696,7 +696,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ti
           children: [
             AnimatedSwitcher(
               duration: const Duration(milliseconds: 200),
-              child: mode.icon(size: 18, color: color, opacity: active ? 1.0 : 0.7, key: ValueKey(mode)),
+              child: KeyedSubtree(
+                key: ValueKey(mode),
+                child: mode.icon(size: 18, color: color, opacity: active ? 1.0 : 0.7),
+              ),
             ),
             const SizedBox(height: 4),
             Text(
@@ -781,7 +784,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ti
             Row(
               children: [
                 _presetTile(
-                  const TomatoIcon(size: 20),
+                  const FocusIcon(size: 20, color: Color(0xFFFF7A66), strokeWidth: 2.2),
                   'Pomodoro',
                   25, 5, 15,
                 ),
