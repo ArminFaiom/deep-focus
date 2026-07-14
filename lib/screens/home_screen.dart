@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
 import '../services/timer_service.dart';
@@ -1198,8 +1199,8 @@ class _RingPainter extends CustomPainter {
     if (fraction > 0) {
       final progressPaint = Paint()
         ..shader = SweepGradient(
-          startAngle: -3.14159 / 2,
-          endAngle: 3.14159 * 1.5,
+          startAngle: -math.pi / 2,
+          endAngle: math.pi * 1.5,
           colors: [
             accentColor,
             accentColor.withOpacity(0.6),
@@ -1211,10 +1212,10 @@ class _RingPainter extends CustomPainter {
         ..strokeWidth = 17
         ..strokeCap = StrokeCap.round;
 
-      final sweepAngle = 2 * 3.14159 * fraction;
+      final sweepAngle = 2 * math.pi * fraction;
       canvas.drawArc(
         Rect.fromCircle(center: center, radius: radius),
-        -3.14159 / 2,
+        -math.pi / 2,
         sweepAngle,
         false,
         progressPaint,
@@ -1222,10 +1223,10 @@ class _RingPainter extends CustomPainter {
 
       // Glow on progress end
       if (fraction < 1.0) {
-        final endAngle = -3.14159 / 2 + sweepAngle;
+        final endAngle = -math.pi / 2 + sweepAngle;
         final endPoint = Offset(
-          center.dx + radius * cos(endAngle),
-          center.dy + radius * sin(endAngle),
+          center.dx + radius * math.cos(endAngle),
+          center.dy + radius * math.sin(endAngle),
         );
         final glowPaint = Paint()
           ..color = accentColor
@@ -1234,9 +1235,6 @@ class _RingPainter extends CustomPainter {
       }
     }
   }
-
-  double cos(double r) => cos(r);
-  double sin(double r) => sin(r);
 
   @override
   bool shouldRepaint(covariant _RingPainter old) =>
