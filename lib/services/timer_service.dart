@@ -159,6 +159,8 @@ class TimerService {
           ),
         ),
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
       );
 
       debugPrint('$_TAG scheduled completion notification for ${scheduledTime.toIso8601String()}');
