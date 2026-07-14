@@ -56,9 +56,10 @@ class TimerService {
           ),
         );
         // Completion channel — high priority with sound
+        // Use a fresh channel ID to break Android's cached channel (old one had no/different sound)
         await plugin.createNotificationChannel(
           const AndroidNotificationChannel(
-            'session_complete', 'Session Complete',
+            'session_complete_v2', 'Session Complete',
             description: 'Session completion notifications',
             importance: Importance.high,
             playSound: true,
@@ -112,15 +113,15 @@ class TimerService {
     await prefs.setBool('timer_running', true);
     await prefs.setBool('timer_paused', false);
 
+    _startTicker();
+    _showProgressNotification(mode, durationSeconds);
+
     // Cancel any previously scheduled completion notification
     await _notifications.cancel(_completionNotificationId);
 
     // Schedule the completion notification via AlarmManager
     // This fires even if the app is killed/backgrounded
-    await _scheduleCompletionNotification(mode, durationSeconds);
-
-    _startTicker();
-    _showProgressNotification(mode, durationSeconds);
+    _scheduleCompletionNotification(mode, durationSeconds);
   }
 
   /// Schedule a local notification at the exact time the timer expires.
@@ -137,7 +138,7 @@ class TimerService {
         scheduledTime,
         NotificationDetails(
           android: AndroidNotificationDetails(
-            'session_complete', 'Session Complete',
+            'session_complete_v2', 'Session Complete',
             channelDescription: 'Session completion notifications',
             importance: Importance.high,
             priority: Priority.high,
@@ -313,7 +314,7 @@ class TimerService {
         '$_currentMode session complete! Take a break!',
         NotificationDetails(
           android: AndroidNotificationDetails(
-            'session_complete', 'Session Complete',
+            'session_complete_v2', 'Session Complete',
             channelDescription: 'Session completion notifications',
             importance: Importance.high,
             priority: Priority.high,

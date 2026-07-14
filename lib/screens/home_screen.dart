@@ -45,9 +45,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ti
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _loadSettings();
-    _initializeTimer();
     _initAnimations();
+    _initializeTimer();
+    // _loadSettings is called from _initializeTimer after timer service ready
   }
 
   void _initAnimations() {
@@ -98,7 +98,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ti
     _timerService.onComplete = () {
       if (mounted) _handleTimerComplete();
     };
-    _timerService.initialize().then((_) => _syncTimerState());
+    _timerService.initialize().then((_) {
+      _loadSettings().then((_) => _syncTimerState());
+    });
   }
 
   void _updateRingAnimation() {
