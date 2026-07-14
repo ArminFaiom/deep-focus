@@ -348,6 +348,69 @@ class _LongBreakIconPainter extends CustomPainter {
   bool shouldRepaint(covariant _LongBreakIconPainter old) => old.color != color;
 }
 
+/// ─── Tomato Icon (for Pomodoro preset - hand drawn vector) ───
+class TomatoIcon extends StatelessWidget {
+  final double size;
+  final double opacity;
+
+  const TomatoIcon({super.key, this.size = 20, this.opacity = 1.0});
+
+  @override
+  Widget build(BuildContext context) {
+    return Opacity(
+      opacity: opacity,
+      child: CustomPaint(
+        size: Size(size, size),
+        painter: _TomatoPainter(),
+      ),
+    );
+  }
+}
+
+class _TomatoPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+
+    // Tomato body
+    final bodyRect = Rect.fromLTWH(w * 0.06, h * 0.28, w * 0.88, h * 0.70);
+    final bodyPaint = Paint()
+      ..shader = const LinearGradient(
+        colors: [Color(0xFFFF7A66), Color(0xFFE0332F)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ).createShader(bodyRect);
+    canvas.drawOval(bodyRect, bodyPaint);
+
+    // Highlight
+    final highlightPaint = Paint()..color = Colors.white.withOpacity(0.22);
+    canvas.drawOval(
+      Rect.fromLTWH(w * 0.20, h * 0.38, w * 0.22, h * 0.14),
+      highlightPaint,
+    );
+
+    // Leaves (3 leaf stem)
+    final leafPaint = Paint()..color = const Color(0xFF4CAF6D);
+    final leafCenter = Offset(w * 0.5, h * 0.28);
+    for (final angle in [-0.6, 0.0, 0.6]) {
+      canvas.save();
+      canvas.translate(leafCenter.dx, leafCenter.dy);
+      canvas.rotate(angle);
+      final leafPath = Path()
+        ..moveTo(0, 0)
+        ..quadraticBezierTo(w * 0.16, -h * 0.14, 0, -h * 0.30)
+        ..quadraticBezierTo(-w * 0.16, -h * 0.14, 0, 0)
+        ..close();
+      canvas.drawPath(leafPath, leafPaint);
+      canvas.restore();
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _TomatoPainter old) => false;
+}
+
 /// ─── Celebration Icon (for completion notification - replaces 🎉) ───
 class CelebrationIcon extends StatelessWidget {
   final double size;

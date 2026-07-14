@@ -785,7 +785,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ti
             Row(
               children: [
                 _presetTile(
-                  const FocusIcon(size: 20, color: Color(0xFFFF7A66), strokeWidth: 2.2),
+                  const TomatoIcon(size: 22),
                   'Pomodoro',
                   25, 5, 15,
                 ),
@@ -860,7 +860,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ti
             mainAxisSize: MainAxisSize.min,
             children: [
               icon,
-              const SizedBox(height: 6),
+              const SizedBox(height: 12),
               Text(
                 label,
                 style: TextStyle(

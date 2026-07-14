@@ -182,7 +182,7 @@ class TimerService {
       await _notifications.show(
         2,
         'Deep Focus',
-        '$_currentMode session complete!',
+        '$_currentMode session complete! Take a break!',
         const NotificationDetails(
           android: AndroidNotificationDetails(
             'completion_channel', 'Completion',
@@ -192,6 +192,10 @@ class TimerService {
             autoCancel: true,
             ongoing: false,
             icon: '@mipmap/ic_launcher',
+            enableVibration: true,
+            vibrationPattern: Int64List.fromList([0, 300, 200, 600]),
+            playSound: true,
+            sound: RawResourceAndroidNotificationSound('alarm'),
           ),
         ),
       );
