@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -179,11 +180,12 @@ class TimerService {
 
   Future<void> showCompletedNotification() async {
     try {
+      final vibrationPattern = Int64List.fromList([0, 300, 200, 600]);
       await _notifications.show(
         2,
         'Deep Focus',
         '$_currentMode session complete! Take a break!',
-        const NotificationDetails(
+        NotificationDetails(
           android: AndroidNotificationDetails(
             'completion_channel', 'Completion',
             channelDescription: 'Session completion notifications',
@@ -193,7 +195,7 @@ class TimerService {
             ongoing: false,
             icon: '@mipmap/ic_launcher',
             enableVibration: true,
-            vibrationPattern: Int64List.fromList([0, 300, 200, 600]),
+            vibrationPattern: vibrationPattern,
             playSound: true,
             sound: RawResourceAndroidNotificationSound('alarm'),
           ),
