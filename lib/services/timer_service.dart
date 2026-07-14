@@ -1,9 +1,10 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/data/latest_all.dart' as tz;
+import 'package:timezone/timezone.dart' as tz;
 
 class TimerService {
   static final TimerService _instance = TimerService._internal();
@@ -12,6 +13,8 @@ class TimerService {
 
   final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
   static const _TAG = '[TimerSvc]';
+  static const _completionNotificationId = 2;
+  static const _progressNotificationId = 1;
 
   Timer? _ticker;
   int _remainingSeconds = 0;
@@ -24,7 +27,9 @@ class TimerService {
 
   Future<void> initialize() async {
     try {
-      // Use a fresh channel ID — old channel was cached without sound on Android
+      // Initialize timezone data for scheduled notifications
+      tz.initializeTimeZones();
+
       const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
       const iosSettings = DarwinInitializationSettings(
         requestAlertPermission: true,
@@ -37,7 +42,6 @@ class TimerService {
       );
       await _notifications.initialize(initSettings);
 
-      // Create channels explicitly with sound from the start
       final plugin = _notifications.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
       if (plugin != null) {
@@ -51,7 +55,7 @@ class TimerService {
             enableVibration: false,
           ),
         );
-        // Completion channel — MUST be created with sound before first show
+        // Completion channel — high priority with sound
         await plugin.createNotificationChannel(
           const AndroidNotificationChannel(
             'session_complete', 'Session Complete',
@@ -59,15 +63,20 @@ class TimerService {
             importance: Importance.high,
             playSound: true,
             enableVibration: true,
-            sound: RawResourceAndroidNotificationSound('alarm'),
+            sound: RawResourceAndroidNotificationSound('chime'),
           ),
         );
       }
 
-      // Request notification permission on Android 13+
       await _requestNotificationPermission();
 
-      debugPrint('$_TAG initialized with sound channels');
+      // Check if the app was launched by a notification tap
+      final launchDetails = await _notifications.getNotificationAppLaunchDetails();
+      if (launchDetails != null && launchDetails.didNotificationLaunchApp) {
+        debugPrint('$_TAG app launched from notification');
+      }
+
+      debugPrint('$_TAG initialized with sound channels + scheduled notifications');
     } catch (e, st) {
       debugPrint('$_TAG init failed: $e\n$st');
     }
@@ -103,8 +112,59 @@ class TimerService {
     await prefs.setBool('timer_running', true);
     await prefs.setBool('timer_paused', false);
 
+    // Cancel any previously scheduled completion notification
+    await _notifications.cancel(_completionNotificationId);
+
+    // Schedule the completion notification via AlarmManager
+    // This fires even if the app is killed/backgrounded
+    await _scheduleCompletionNotification(mode, durationSeconds);
+
     _startTicker();
     _showProgressNotification(mode, durationSeconds);
+  }
+
+  /// Schedule a local notification at the exact time the timer expires.
+  /// Uses Android's AlarmManager via zonedSchedule — fires even when app is dead.
+  Future<void> _scheduleCompletionNotification(String mode, int durationSeconds) async {
+    try {
+      final scheduledTime = tz.TZDateTime.now(tz.local).add(Duration(seconds: durationSeconds));
+      final modeLabel = mode == 'focus' ? 'Focus' : mode == 'break_' ? 'Break' : 'Long Break';
+
+      await _notifications.zonedSchedule(
+        _completionNotificationId,
+        'Deep Focus',
+        '$modeLabel session complete! Take a break!',
+        scheduledTime,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            'session_complete', 'Session Complete',
+            channelDescription: 'Session completion notifications',
+            importance: Importance.high,
+            priority: Priority.high,
+            autoCancel: true,
+            ongoing: false,
+            icon: '@mipmap/ic_launcher',
+            enableVibration: true,
+            vibrationPattern: Int64List.fromList([0, 200, 150, 300, 200, 600]),
+            playSound: true,
+            sound: RawResourceAndroidNotificationSound('chime'),
+            fullScreenIntent: true,
+            category: AndroidNotificationCategory.alarm,
+          ),
+          iOS: const DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+            interruptionLevel: InterruptionLevel.timeSensitive,
+          ),
+        ),
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      );
+
+      debugPrint('$_TAG scheduled completion notification for ${scheduledTime.toIso8601String()}');
+    } catch (e) {
+      debugPrint('$_TAG schedule completion failed: $e');
+    }
   }
 
   Future<void> pauseTimer() async {
@@ -113,18 +173,23 @@ class TimerService {
 
     if (!isPaused) {
       _ticker?.cancel();
+      // Cancel the scheduled completion notification — we'll reschedule on resume
+      await _notifications.cancel(_completionNotificationId);
       await prefs.setInt('timer_remaining', _remainingSeconds);
       await prefs.setBool('timer_paused', true);
       await prefs.setInt('timer_pause_time', DateTime.now().millisecondsSinceEpoch);
-      await _notifications.cancel(1);
+      await _notifications.cancel(_progressNotificationId);
     } else {
       final pauseTime = prefs.getInt('timer_pause_time') ?? DateTime.now().millisecondsSinceEpoch;
       final pauseDuration = DateTime.now().millisecondsSinceEpoch - pauseTime;
-      final oldStart = prefs.getInt('timer_start') ?? 0;
+      final oldStart = prefs.getInt('timer_start') ?? DateTime.now().millisecondsSinceEpoch;
 
       await prefs.setInt('timer_start', oldStart + pauseDuration);
       await prefs.setBool('timer_paused', false);
       await prefs.remove('timer_pause_time');
+
+      // Reschedule completion notification for the remaining time
+      await _scheduleCompletionNotification(_currentMode, _remainingSeconds);
 
       _startTicker();
       _showProgressNotification(_currentMode, _remainingSeconds);
@@ -142,7 +207,8 @@ class TimerService {
     await prefs.remove('timer_pause_time');
     await prefs.setBool('timer_running', false);
     await prefs.setBool('timer_paused', false);
-    await _notifications.cancel(1);
+    await _notifications.cancel(_progressNotificationId);
+    await _notifications.cancel(_completionNotificationId);
   }
 
   void _startTicker() {
@@ -156,6 +222,8 @@ class TimerService {
       if (_remainingSeconds <= 0) {
         _ticker?.cancel();
         debugPrint('$_TAG ticker hit 0 — firing onComplete');
+        // Cancel the scheduled notification since we're completing in-app
+        _notifications.cancel(_completionNotificationId);
         onComplete?.call();
       }
     });
@@ -198,6 +266,9 @@ class TimerService {
 
     if (_remainingSeconds <= 0 && state['running'] == true && state['paused'] == false) {
       _ticker?.cancel();
+      // Timer expired while app was backgrounded — fire completion now
+      // The scheduled notification already fired, but we still need to
+      // update UI state, save the session, and auto-start next phase
       onComplete?.call();
       return;
     }
@@ -211,7 +282,7 @@ class TimerService {
     try {
       final modeLabel = mode == 'focus' ? 'Focus' : mode == 'break_' ? 'Break' : 'Long Break';
       await _notifications.show(
-        1,
+        _progressNotificationId,
         'Deep Focus',
         '$modeLabel timer running…',
         const NotificationDetails(
@@ -235,7 +306,7 @@ class TimerService {
       final vibrationPattern = Int64List.fromList([0, 200, 150, 300, 200, 600]);
 
       await _notifications.show(
-        2,
+        _completionNotificationId,
         'Deep Focus',
         '$_currentMode session complete! Take a break!',
         NotificationDetails(
@@ -250,8 +321,9 @@ class TimerService {
             enableVibration: true,
             vibrationPattern: vibrationPattern,
             playSound: true,
-            sound: RawResourceAndroidNotificationSound('alarm'),
+            sound: RawResourceAndroidNotificationSound('chime'),
             fullScreenIntent: true,
+            category: AndroidNotificationCategory.alarm,
           ),
         ),
       );

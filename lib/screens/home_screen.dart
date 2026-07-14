@@ -174,7 +174,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ti
   }
 
   int get _todayMinutes =>
-      _sessions.where((s) => s['date'] == _todayStr).fold(0, (sum, s) => sum + (s['duration'] as int));
+      _sessions.where((s) => s['date'] == _todayStr).fold(0, (sum, s) => sum + ((s['duration'] as int) ~/ 60));
 
   int get _todaySessions =>
       _sessions.where((s) => s['date'] == _todayStr).length;
@@ -183,7 +183,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ti
       _sessions.where((s) => s['date'] == _todayStr && s['mode'] == 'focus').length;
 
   int get _totalMinutes =>
-      _sessions.fold(0, (sum, s) => sum + (s['duration'] as int));
+      _sessions.fold(0, (sum, s) => sum + ((s['duration'] as int) ~/ 60));
 
   String get _totalDisplay {
     final hours = _totalMinutes ~/ 60;
@@ -216,10 +216,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ti
       final key = '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
       final mins = _sessions
           .where((s) => s['date'] == key)
-          .fold(0, (sum, s) => sum + (s['duration'] as int));
+          .fold(0, (sum, s) => sum + ((s['duration'] as int) ~/ 60));
       result.add(_DayData(
         ['S', 'M', 'T', 'W', 'T', 'F', 'S'][d.weekday % 7],
-        mins ~/ 60,
+        mins,
       ));
     }
     return result;
@@ -993,7 +993,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ti
               children: [
                 _statTile(Icons.today_rounded, '$_todaySessions', 'Sessions today'),
                 _statDivider(),
-                _statTile(Icons.schedule_rounded, '${_todayMinutes ~/ 60}m', 'Minutes today'),
+                _statTile(Icons.schedule_rounded, '${_todayMinutes}m', 'Minutes today'),
                 _statDivider(),
                 _statTile(Icons.insights_rounded, _totalDisplay, 'All time'),
               ],
