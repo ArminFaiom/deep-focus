@@ -146,8 +146,6 @@ class TimerService {
             vibrationPattern: Int64List.fromList([0, 200, 150, 300, 200, 600]),
             playSound: true,
             sound: RawResourceAndroidNotificationSound('chime'),
-            fullScreenIntent: true,
-            category: AndroidNotificationCategory.alarm,
           ),
           iOS: const DarwinNotificationDetails(
             presentAlert: true,
@@ -324,8 +322,6 @@ class TimerService {
             vibrationPattern: vibrationPattern,
             playSound: true,
             sound: RawResourceAndroidNotificationSound('chime'),
-            fullScreenIntent: true,
-            category: AndroidNotificationCategory.alarm,
           ),
           iOS: const DarwinNotificationDetails(
             presentAlert: true,
