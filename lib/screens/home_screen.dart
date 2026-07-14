@@ -291,14 +291,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ti
     setState(() {
       _sessions = newSessions;
       _remaining = 0;
-      _completed = !autoStart;
-      _running = autoStart;
+      _completed = true;        // show completion state during the delay
+      _running = false;          // not running yet — will start after delay
       _paused = false;
-      _total = autoStart ? nextSecs : _total;
-      if (autoStart) {
-        _mode = nextMode!;
-        _remaining = nextSecs;
-      }
+      // Keep _total and _mode showing the completed phase
     });
 
     // Persist immediately
@@ -310,13 +306,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ti
       debugPrint('DeepFocus: save failed: $e');
     }
 
-    // Trigger completion notification
-    await _timerService.showCompletedNotification();
+    // The scheduled notification (ID 3, via AlarmManager) fires from the
+    // Android system with sound + vibration. Don't cancel it — let it ring.
+    // Also fire the in-app notification as a fallback.
+    _timerService.showCompletedNotification();
 
-    // Auto-start next phase
+    // Auto-start next phase, but DELAY 3 seconds so the scheduled completion
+    // notification (AlarmManager, ID 3) has time to fire and play its sound.
+    // Without this delay, startTimer() → zonedSchedule(ID 3, futureTime)
+    // replaces the pending alarm before it fires, killing the sound.
     if (autoStart) {
-      _ringController.forward(from: 0);
-      _timerService.startTimer(durationSeconds: nextSecs, mode: _mode.name);
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted && !_running) {
+          setState(() {
+            _mode = nextMode!;
+            _remaining = nextSecs;
+            _total = nextSecs;
+            _running = true;
+            _completed = false;
+          });
+          _ringController.forward(from: 0);
+          _timerService.startTimer(durationSeconds: nextSecs, mode: nextMode!.name);
+        }
+      });
     }
   }
 

@@ -113,10 +113,11 @@ class TimerService {
     _startTicker();
     _showProgressNotification(mode, durationSeconds);
 
-    // Cancel any previously scheduled completion notification
-    await _notifications.cancel(_scheduledCompletionId);
-
-    // Schedule the completion notification via AlarmManager (fire-and-forget)
+    // Don't immediately cancel the previous scheduled completion notification.
+    // If the previous phase just finished, its scheduled notification (ID 3)
+    // is about to fire from AlarmManager with sound. Cancelling it here would
+    // kill the sound. Instead, schedule the new one which replaces ID 3 —
+    // zonedSchedule overwrites the previous schedule for the same ID.
     _scheduleCompletionNotification(mode, durationSeconds);
   }
 
@@ -221,9 +222,10 @@ class TimerService {
       if (_remainingSeconds <= 0) {
         _ticker?.cancel();
         debugPrint('$_TAG ticker hit 0 — firing onComplete');
-        // Cancel the scheduled notification — we're completing in-app,
-        // showCompletedNotification will handle it with a different ID
-        _notifications.cancel(_scheduledCompletionId);
+        // Don't cancel the scheduled notification — let it fire from the
+        // system via AlarmManager. That is what plays the sound reliably.
+        // Just clear the progress (ongoing) notification.
+        _notifications.cancel(_progressNotificationId);
         onComplete?.call();
       }
     });
