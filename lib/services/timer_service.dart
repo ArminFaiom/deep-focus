@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
@@ -23,13 +24,65 @@ class TimerService {
 
   Future<void> initialize() async {
     try {
+      // Use a fresh channel ID — old channel was cached without sound on Android
+      const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+      const iosSettings = DarwinInitializationSettings(
+        requestAlertPermission: true,
+        requestBadgePermission: true,
+        requestSoundPermission: true,
+      );
       const initSettings = InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        android: androidSettings,
+        iOS: iosSettings,
       );
       await _notifications.initialize(initSettings);
-      debugPrint('$_TAG initialized');
+
+      // Create channels explicitly with sound from the start
+      final plugin = _notifications.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      if (plugin != null) {
+        // Timer progress channel (low priority, no sound)
+        await plugin.createNotificationChannel(
+          const AndroidNotificationChannel(
+            'timer_channel', 'Timer',
+            description: 'Focus timer notifications',
+            importance: Importance.low,
+            playSound: false,
+            enableVibration: false,
+          ),
+        );
+        // Completion channel — MUST be created with sound before first show
+        await plugin.createNotificationChannel(
+          const AndroidNotificationChannel(
+            'session_complete', 'Session Complete',
+            description: 'Session completion notifications',
+            importance: Importance.high,
+            playSound: true,
+            enableVibration: true,
+            sound: RawResourceAndroidNotificationSound('alarm'),
+          ),
+        );
+      }
+
+      // Request notification permission on Android 13+
+      await _requestNotificationPermission();
+
+      debugPrint('$_TAG initialized with sound channels');
     } catch (e, st) {
       debugPrint('$_TAG init failed: $e\n$st');
+    }
+  }
+
+  Future<void> _requestNotificationPermission() async {
+    try {
+      final plugin = _notifications.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      if (plugin != null) {
+        final granted = await plugin.requestNotificationsPermission();
+        debugPrint('$_TAG notification permission granted: $granted');
+      }
+    } catch (e) {
+      debugPrint('$_TAG permission request error: $e');
     }
   }
 
@@ -56,7 +109,6 @@ class TimerService {
 
   Future<void> pauseTimer() async {
     final prefs = await SharedPreferences.getInstance();
-    // We don't track _isPaused in service because UI handles it now
     final isPaused = prefs.getBool('timer_paused') ?? false;
 
     if (!isPaused) {
@@ -180,14 +232,15 @@ class TimerService {
 
   Future<void> showCompletedNotification() async {
     try {
-      final vibrationPattern = Int64List.fromList([0, 300, 200, 600]);
+      final vibrationPattern = Int64List.fromList([0, 200, 150, 300, 200, 600]);
+
       await _notifications.show(
         2,
         'Deep Focus',
         '$_currentMode session complete! Take a break!',
         NotificationDetails(
           android: AndroidNotificationDetails(
-            'completion_channel', 'Completion',
+            'session_complete', 'Session Complete',
             channelDescription: 'Session completion notifications',
             importance: Importance.high,
             priority: Priority.high,
@@ -198,9 +251,12 @@ class TimerService {
             vibrationPattern: vibrationPattern,
             playSound: true,
             sound: RawResourceAndroidNotificationSound('alarm'),
+            fullScreenIntent: true,
           ),
         ),
       );
+
+      debugPrint('$_TAG completion notification sent with sound');
     } catch (e) {
       debugPrint('$_TAG completion notif failed: $e');
     }
