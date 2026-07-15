@@ -39,7 +39,7 @@ jobs:
           flutter-version: '3.27.1'
 
       - name: Generate Windows platform files
-        run: flutter create --platforms=windows .
+        run: flutter create --platforms=windows --project-name deep_focus .
 
       - name: Install dependencies
         run: flutter pub get
