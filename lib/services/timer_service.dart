@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
@@ -8,13 +9,23 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
+/// Whether the current platform supports flutter_local_notifications.
+/// The plugin has backends for Android and iOS only — not Windows/macOS/Linux/Web.
+bool get _supportsNotifications =>
+    !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
 class TimerService {
   static final TimerService _instance = TimerService._internal();
   factory TimerService() => _instance;
   TimerService._internal();
 
-  final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
   final AudioPlayer _audioPlayer = AudioPlayer();
+
+  // Lazily created — only on platforms that support it
+  FlutterLocalNotificationsPlugin? _notificationsInstance;
+  FlutterLocalNotificationsPlugin? get _notifications =>
+      _supportsNotifications ? (_notificationsInstance ??= FlutterLocalNotificationsPlugin()) : null;
+
   static const _TAG = '[TimerSvc]';
 
   // Separate IDs so progress / in-app completion / AlarmManager don't cancel each other
@@ -38,13 +49,15 @@ class TimerService {
   Future<void> initialize() async {
     if (_initialized) return;
     try {
-      tz.initializeTimeZones();
-      // Keep local as system-local if available; fall back to UTC (relative offsets still work)
-      try {
-        final name = DateTime.now().timeZoneName;
-        // timezone package needs IANA names; relative scheduling still works with UTC
-        debugPrint('$_TAG device tz name=$name offset=${DateTime.now().timeZoneOffset}');
-      } catch (_) {}
+      if (_supportsNotifications) {
+        tz.initializeTimeZones();
+        // Keep local as system-local if available; fall back to UTC (relative offsets still work)
+        try {
+          final name = DateTime.now().timeZoneName;
+          // timezone package needs IANA names; relative scheduling still works with UTC
+          debugPrint('$_TAG device tz name=$name offset=${DateTime.now().timeZoneOffset}');
+        } catch (_) {}
+      }
 
       // Audio: play even in silent-ish scenarios while app is alive
       await _audioPlayer.setReleaseMode(ReleaseMode.stop);
@@ -52,66 +65,70 @@ class TimerService {
       // Low latency path for short chime
       await _audioPlayer.setPlayerMode(PlayerMode.lowLatency);
 
-      const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-      const iosSettings = DarwinInitializationSettings(
-        requestAlertPermission: true,
-        requestBadgePermission: true,
-        requestSoundPermission: true,
-      );
-      const initSettings = InitializationSettings(
-        android: androidSettings,
-        iOS: iosSettings,
-      );
-      await _notifications.initialize(initSettings);
-
-      final plugin = _notifications.resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>();
-      if (plugin != null) {
-        await plugin.createNotificationChannel(
-          const AndroidNotificationChannel(
-            'timer_channel', 'Timer',
-            description: 'Focus timer notifications',
-            importance: Importance.low,
-            playSound: false,
-            enableVibration: false,
-          ),
+      if (_notifications != null) {
+        const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+        const iosSettings = DarwinInitializationSettings(
+          requestAlertPermission: true,
+          requestBadgePermission: true,
+          requestSoundPermission: true,
         );
-        await plugin.createNotificationChannel(
-          AndroidNotificationChannel(
-            _completionChannelId, 'Session Complete',
-            description: 'Session completion notifications with chime',
-            importance: Importance.max,
-            playSound: true,
-            enableVibration: true,
-            sound: const RawResourceAndroidNotificationSound('chime'),
-            // Critical so heads-up + sound are more likely while app is open
-            audioAttributesUsage: AudioAttributesUsage.alarm,
-          ),
+        const initSettings = InitializationSettings(
+          android: androidSettings,
+          iOS: iosSettings,
         );
+        await _notifications!.initialize(initSettings);
 
-        // Exact alarms (needed for zonedSchedule reliability on Android 12+)
-        try {
-          final canExact = await plugin.canScheduleExactNotifications();
-          debugPrint('$_TAG canScheduleExactNotifications=$canExact');
-          if (canExact == false) {
-            await plugin.requestExactAlarmsPermission();
+        final plugin = _notifications!.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+        if (plugin != null) {
+          await plugin.createNotificationChannel(
+            const AndroidNotificationChannel(
+              'timer_channel', 'Timer',
+              description: 'Focus timer notifications',
+              importance: Importance.low,
+              playSound: false,
+              enableVibration: false,
+            ),
+          );
+          await plugin.createNotificationChannel(
+            AndroidNotificationChannel(
+              _completionChannelId, 'Session Complete',
+              description: 'Session completion notifications with chime',
+              importance: Importance.max,
+              playSound: true,
+              enableVibration: true,
+              sound: const RawResourceAndroidNotificationSound('chime'),
+              // Critical so heads-up + sound are more likely while app is open
+              audioAttributesUsage: AudioAttributesUsage.alarm,
+            ),
+          );
+
+          // Exact alarms (needed for zonedSchedule reliability on Android 12+)
+          try {
+            final canExact = await plugin.canScheduleExactNotifications();
+            debugPrint('$_TAG canScheduleExactNotifications=$canExact');
+            if (canExact == false) {
+              await plugin.requestExactAlarmsPermission();
+            }
+          } catch (e) {
+            debugPrint('$_TAG exact alarm permission: $e');
           }
-        } catch (e) {
-          debugPrint('$_TAG exact alarm permission: $e');
         }
+
+        await _requestNotificationPermission();
       }
 
-      await _requestNotificationPermission();
       _initialized = true;
-      debugPrint('$_TAG initialized OK (channel=$_completionChannelId)');
+      debugPrint('$_TAG initialized OK (notifications=${_supportsNotifications})');
     } catch (e, st) {
       debugPrint('$_TAG init failed: $e\n$st');
     }
   }
 
   Future<void> _requestNotificationPermission() async {
+    if (_notifications == null) return;
     try {
-      final plugin = _notifications.resolvePlatformSpecificImplementation<
+      final plugin = _notifications!.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
       if (plugin != null) {
         final granted = await plugin.requestNotificationsPermission();
@@ -172,11 +189,12 @@ class TimerService {
   /// Schedule a local notification at the exact time the timer expires.
   /// Fires from AlarmManager even when the app process is dead.
   Future<void> _scheduleCompletionNotification(String mode, int durationSeconds) async {
+    if (_notifications == null) return;
     try {
       final scheduledTime = tz.TZDateTime.now(tz.local).add(Duration(seconds: durationSeconds));
       final modeLabel = mode == 'focus' ? 'Focus' : mode == 'break_' ? 'Break' : 'Long Break';
 
-      await _notifications.zonedSchedule(
+      await _notifications!.zonedSchedule(
         _scheduledCompletionId,
         'Deep Focus',
         '$modeLabel session complete! Take a break!',
@@ -222,11 +240,11 @@ class TimerService {
 
     if (!isPaused) {
       _ticker?.cancel();
-      await _notifications.cancel(_scheduledCompletionId);
+      _notifications?.cancel(_scheduledCompletionId);
       await prefs.setInt('timer_remaining', _remainingSeconds);
       await prefs.setBool('timer_paused', true);
       await prefs.setInt('timer_pause_time', DateTime.now().millisecondsSinceEpoch);
-      await _notifications.cancel(_progressNotificationId);
+      _notifications?.cancel(_progressNotificationId);
     } else {
       final pauseTime = prefs.getInt('timer_pause_time') ?? DateTime.now().millisecondsSinceEpoch;
       final pauseDuration = DateTime.now().millisecondsSinceEpoch - pauseTime;
@@ -254,10 +272,10 @@ class TimerService {
     await prefs.remove('timer_pause_time');
     await prefs.setBool('timer_running', false);
     await prefs.setBool('timer_paused', false);
-    await _notifications.cancel(_progressNotificationId);
-    await _notifications.cancel(_scheduledCompletionId);
+    _notifications?.cancel(_progressNotificationId);
+    _notifications?.cancel(_scheduledCompletionId);
     // Leave completion notification (ID 2) alone if user just finished — only clear on explicit stop mid-run
-    await _notifications.cancel(_completionNotificationId);
+    _notifications?.cancel(_completionNotificationId);
   }
 
   void _startTicker() {
@@ -275,8 +293,8 @@ class TimerService {
         // Sound comes from audioplayers (playCompletionSound) which is reliable
         // while the process is alive — including when backgrounded but not killed.
         // When the process is dead, only ID 3 fires (no ticker).
-        _notifications.cancel(_progressNotificationId);
-        _notifications.cancel(_scheduledCompletionId);
+        _notifications?.cancel(_progressNotificationId);
+        _notifications?.cancel(_scheduledCompletionId);
         onComplete?.call();
       }
     });
@@ -331,9 +349,10 @@ class TimerService {
   }
 
   Future<void> _showProgressNotification(String mode, int totalSeconds) async {
+    if (_notifications == null) return;
     try {
       final modeLabel = mode == 'focus' ? 'Focus' : mode == 'break_' ? 'Break' : 'Long Break';
-      await _notifications.show(
+      await _notifications!.show(
         _progressNotificationId,
         'Deep Focus',
         '$modeLabel timer running…',
@@ -358,11 +377,13 @@ class TimerService {
     // 1) Sound first — independent of Android notification policy
     await playCompletionSound();
 
+    if (_notifications == null) return;
+
     try {
       final vibrationPattern = Int64List.fromList([0, 200, 150, 300, 200, 600]);
       final modeLabel = _currentMode == 'focus' ? 'Focus' : _currentMode == 'break_' ? 'Break' : 'Long Break';
 
-      await _notifications.show(
+      await _notifications!.show(
         _completionNotificationId,
         'Deep Focus',
         '$modeLabel session complete! Take a break!',

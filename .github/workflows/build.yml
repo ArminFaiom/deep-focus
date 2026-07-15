@@ -1,4 +1,4 @@
-name: Build APK
+name: Build
 
 on:
   push:
@@ -6,7 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-android:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -16,10 +17,42 @@ jobs:
         with:
           flutter-version: '3.27.1'
 
+      - run: flutter pub get
+
       - name: Build release APK
         run: flutter build apk --release --target-platform android-arm64
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DeepFocus-APK
+          name: DeepFocus-Android-APK
           path: build/app/outputs/flutter-apk/app-release.apk
+
+  build-windows:
+    name: Build Windows App
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.1'
+
+      - name: Generate Windows platform files
+        run: flutter create --platforms=windows .
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Zip Windows build
+        run: |
+          cd build/windows/x64/runner/Release
+          7z a -tzip ${{ github.workspace }}/DeepFocus-Windows.zip *
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DeepFocus-Windows
+          path: DeepFocus-Windows.zip
