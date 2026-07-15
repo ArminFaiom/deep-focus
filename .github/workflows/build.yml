@@ -1,39 +1,12 @@
-name: Build
+name: Build Windows
 
 on:
   push:
     branches: [master]
   workflow_dispatch:
 
-env:
-  # Force CMake to use VS 2022 (windows-latest has VS 2022, not 2019)
-  CMAKE_GENERATOR: "Visual Studio 17 2022"
-  CMAKE_GENERATOR_PLATFORM: "x64"
-
 jobs:
-  build-android:
-    name: Build Android APK
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.27.1'
-
-      - run: flutter pub get
-
-      - name: Build release APK
-        run: flutter build apk --release --target-platform android-arm64
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: DeepFocus-Android-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
-
   build-windows:
-    name: Build Windows App
     runs-on: windows-latest
 
     steps:
@@ -41,18 +14,13 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.27.1'
+          flutter-version: '3.29.3'
 
-      - name: Generate Windows platform files
-        run: flutter create --platforms=windows --project-name deep_focus .
+      - run: flutter create --platforms=windows --project-name deep_focus .
+      - run: flutter pub get
+      - run: flutter build windows --release
 
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build Windows release
-        run: flutter build windows --release
-
-      - name: Zip Windows build
+      - name: Zip release
         run: |
           cd build/windows/x64/runner/Release
           7z a -tzip ${{ github.workspace }}/DeepFocus-Windows.zip *
