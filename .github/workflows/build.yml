@@ -5,6 +5,11 @@ on:
     branches: [master]
   workflow_dispatch:
 
+env:
+  # Force CMake to use VS 2022 (windows-latest has VS 2022, not 2019)
+  CMAKE_GENERATOR: "Visual Studio 17 2022"
+  CMAKE_GENERATOR_PLATFORM: "x64"
+
 jobs:
   build-android:
     name: Build Android APK
