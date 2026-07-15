@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-windows:
-    runs-on: windows-2019
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -16,9 +16,22 @@ jobs:
         with:
           flutter-version: '3.27.1'
 
-      - run: flutter create --platforms=windows --project-name deep_focus .
-      - run: flutter pub get
-      - run: flutter build windows --release
+      - name: Generate Windows platform files
+        run: flutter create --platforms=windows --project-name deep_focus .
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Patch generated CMakeLists.txt to use Ninja generator (VS-agnostic)
+      - name: Select Ninja CMake generator
+        run: |
+          $cmake = Resolve-Path "windows\flutter\ephemeral\.plugin_symlinks\flutter_windows\CMakeLists.txt"
+          $content = Get-Content $cmake
+          $content = $content -replace 'Visual Studio 16 2019', 'Ninja'
+          Set-Content $cmake $content
+
+      - name: Build Windows release
+        run: flutter build windows --release
 
       - name: Zip release
         run: |
