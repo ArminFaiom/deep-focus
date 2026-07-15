@@ -30,8 +30,9 @@ class DeepFocusApp extends StatelessWidget {
         splashFactory: InkRipple.splashFactory,
         highlightColor: Colors.transparent,
         pageTransitionsTheme: PageTransitionsTheme(builders: {
-          TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
-          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.android: const FadeUpwardsPageTransitionsBuilder(),
+          TargetPlatform.iOS: const FadeUpwardsPageTransitionsBuilder(),
+          TargetPlatform.windows: const FadeUpwardsPageTransitionsBuilder(),
         }),
       ),
       home: const HomeScreen(),
